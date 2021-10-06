@@ -39,7 +39,7 @@ func main() {
 	initFlags()
 
 	err := os.MkdirAll("./screenshots/", 0666)
-	if(err != nil) {
+	if err != nil {
 		fmt.Printf("Error creating screenshots folder: %s", err)
 		os.Exit(-1)
 	}
@@ -51,8 +51,12 @@ func main() {
 			filename := fmt.Sprintf("./screenshots/%s.png", time.Now().Format("2006-01-02-15-04-05"))
 			file, err := os.Create(filename)
 			if err == nil {
-				png.Encode(file, image)
+				err := png.Encode(file, image)
 				file.Close()
+				if err != nil {
+					fmt.Printf("Error encoding screen grab as PNG: %s\n", err)
+					os.Remove(filename)
+				}
 			} else {
 				fmt.Printf("Error writing screenshot: %s\n", err)
 			}
