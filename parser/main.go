@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
-	"io"
+	"fmt"
+	"image"
+	"image/png"
 	"io/ioutil"
-	"mime/multipart"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/fsnotify/fsnotify"
@@ -53,61 +57,93 @@ func main() {
 	}
 	log.Debug("Watching for file system changes...")
 
-	go parseScreenshot("samples/sample1.png")
+	go parseScreenshot("samples/ah-iron-ore.png")
 
 	<-done
 }
 
-func parseScreenshot(fileName string) (string, error) {
+func parseScreenshot(fileName string) {
 	log.Debugf("Trying to parse %s", fileName)
-	body, writer := io.Pipe()
-	request, err := http.NewRequest("POST", "http://localhost:8080/file", body)
+	titlePart, err := parseImagePart(fileName, 166, 491, 415, 81)
 	if err != nil {
-		log.Errorf("Error creating POST request: %s", err)
+		log.Errorf("Error parsing title part: %s", err)
+		return
+	}
+	log.Infof("Title: %s", titlePart)
+
+	prices, err := parseImagePart(fileName, 969, 321, 141, 726)
+	if err != nil {
+		log.Errorf("Error parsing prices part: %s", err)
+		return
+	}
+	parsedPrices := parsePrices(prices)
+	log.Infof("Parsed prices: %s", parsedPrices)
+
+	amounts, err := parseImagePart(fileName, 1511, 317, 58, 688)
+	if err != nil {
+		log.Errorf("Error parsing amounts part: %s", err)
+		return
+	}
+	parsedAmounts := parseAmounts(amounts)
+	log.Infof("Parsed amounts: %s", parsedAmounts)
+
+	for i := 0; i < len(parsedPrices); i++ {
+		if parsedPrices[i] != -1 && parsedAmounts[i] != -1 {
+			log.Infof("%s: %d for %f gold", titlePart, parsedAmounts[i], float32(parsedPrices[i]))
+		}
+	}
+}
+
+func parsePrices(data string) []float64 {
+	tokens := strings.Split(data, "\n")
+	floats := make([]float64, len(tokens))
+	for i, token := range tokens {
+		f, err := strconv.ParseFloat(strings.ReplaceAll(token, ",", "."), 32)
+		if err != nil {
+			floats[i] = -1
+		} else {
+			if !strings.Contains(token, ",") && !strings.Contains(token, ".") {
+				f = f / 100
+			}
+			floats[i] = f
+		}
+	}	
+	return floats
+}
+
+func parseAmounts(data string) []int {
+	tokens := strings.Split(data, "\n")
+	ints := make([]int, len(tokens))
+	for i, token := range tokens {
+		value, err := strconv.ParseInt(strings.ReplaceAll(token, ",", "."), 10, 64)
+		if err != nil {
+			ints[i] = -1
+		} else {
+			ints[i] = int(value)
+		}
+	}
+	return ints
+}
+
+func parseImagePart(filePath string, x int, y int, width int, height int) (string, error) {
+	imagePart, err := getImagePart(filePath, x, y, width, height)
+	if err != nil {
+		log.Errorf("Error getting image part: %s", err)
 		return "", err
 	}
-	multiPartWriter := multipart.NewWriter(writer)
-	request.Header.Add("Content-Type", multiPartWriter.FormDataContentType())
-
-	errchan := make(chan error)
-
-	go func() {
-		defer close(errchan)
-		defer writer.Close()
-		defer multiPartWriter.Close()
-
-		w, err := multiPartWriter.CreateFormFile("file", "file.png")
-		if err != nil {
-			log.Errorf("Error creating multipart request: %s", err)
-			errchan <- err
-			return
-		}
-		in, err := os.Open(fileName)
-		if err != nil {
-			log.Errorf("Error reading sample file: %s", err)
-			errchan <- err
-			return
-		}
-		defer in.Close()
-		_, err = io.Copy(w, in)
-		if err != nil {
-			log.Errorf("Error copying sample data: %s", err)
-			errchan <- err
-			return
-		}
-	}()
-
-	resp, err := http.DefaultClient.Do(request)
-	merr := <-errchan
-
-	if err != nil || merr != nil {
-		log.Errorf("Error sending POST request: http error: %s, multipart error: %s", err, merr)
-		if err == nil {
-			err = merr
-		}
+	buffer := new(bytes.Buffer)
+	err = png.Encode(buffer, imagePart)
+	if err != nil {
+		log.Errorf("Error encoding image part: %s", err)
 		return "", err
 	}
-
+	base64String := base64.StdEncoding.EncodeToString(buffer.Bytes())
+	requestData := fmt.Sprintf("{\"base64\":\"%s\"}", base64String)
+	resp, err := http.Post("http://localhost:8080/base64", "application/json", strings.NewReader(requestData))
+	if err != nil {
+		log.Errorf("Error getting OCR result: %s", err)
+		return "", err
+	}
 	defer resp.Body.Close()
 	bodyBytes, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
@@ -120,4 +156,20 @@ func parseScreenshot(fileName string) (string, error) {
 	result := bodyJson["result"]
 	log.Debugf("Parsed: %s", result)
 	return result.(string), nil
+}
+
+func getImagePart(filePath string, x int, y int, width int, height int) (image.Image, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		log.Errorf("Error reading image: %s", err)
+		return nil, err
+	}
+	img, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		log.Errorf("Error decoding image: %s", err)
+		return nil, err
+	}
+	rgbImg := img.(*image.NRGBA)
+	subImage := rgbImg.SubImage(image.Rect(x, y, x+width, y+height))
+	return subImage, nil
 }
