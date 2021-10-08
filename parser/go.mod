@@ -4,6 +4,7 @@ go 1.17
 
 require (
 	github.com/fsnotify/fsnotify v1.5.1
+	github.com/pborman/getopt v1.1.0
 	github.com/sirupsen/logrus v1.8.1
 )
 

@@ -14,13 +14,27 @@ import (
 	"strings"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/pborman/getopt"
 	log "github.com/sirupsen/logrus"
 )
 
 // Start a ocrserver via `docker run --rm -p 8080:8080 otiai10/ocrserver`
 
+var screenshotsFolderPrt *string
+var keepScreenshots = false
+
+func initFlags() {
+	getopt.CommandLine.SetParameters("")
+	screenshotsFolderPrt = getopt.StringLong("screenshot-folder", 'f', "./screenshots/", "Where to store screenshots (default: ./screenshots/)")
+	getopt.BoolVarLong(&keepScreenshots, "keep-screenshots", 'k', "Keep screenshots after parsing is finished (default: false)")
+	getopt.Parse()
+}
+
 func main() {
 	log.SetLevel(log.DebugLevel)
+
+	initFlags()
+
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		log.Fatalf("Error initializing file system watcher: %s", err)
@@ -51,25 +65,27 @@ func main() {
 		}
 	}()
 
-	err = watcher.Add("./")
+	err = watcher.Add(*screenshotsFolderPrt)
 	if err != nil {
 		log.Fatalf("Error watching screenshot folder: %s", err)
 	}
-	log.Debug("Watching for file system changes...")
+	log.Info("Watching for file system changes...")
 
-	go parseScreenshot("samples/ah-iron-ore.png")
+	// go parseScreenshot("samples/ah-iron-ore.png")
 
 	<-done
 }
 
 func parseScreenshot(fileName string) {
+	if !keepScreenshots {
+		defer os.Remove(fileName)
+	}
 	log.Debugf("Trying to parse %s", fileName)
-	titlePart, err := parseImagePart(fileName, 166, 491, 415, 81)
+	title, err := parseImagePart(fileName, 166, 491, 415, 81)
 	if err != nil {
 		log.Errorf("Error parsing title part: %s", err)
 		return
 	}
-	log.Infof("Title: %s", titlePart)
 
 	prices, err := parseImagePart(fileName, 969, 321, 141, 726)
 	if err != nil {
@@ -77,7 +93,7 @@ func parseScreenshot(fileName string) {
 		return
 	}
 	parsedPrices := parsePrices(prices)
-	log.Infof("Parsed prices: %s", parsedPrices)
+	log.Debugf("Parsed prices: %s", parsedPrices)
 
 	amounts, err := parseImagePart(fileName, 1511, 317, 58, 688)
 	if err != nil {
@@ -85,11 +101,11 @@ func parseScreenshot(fileName string) {
 		return
 	}
 	parsedAmounts := parseAmounts(amounts)
-	log.Infof("Parsed amounts: %s", parsedAmounts)
+	log.Debugf("Parsed amounts: %s", parsedAmounts)
 
 	for i := 0; i < len(parsedPrices); i++ {
 		if parsedPrices[i] != -1 && parsedAmounts[i] != -1 {
-			log.Infof("%s: %d for %f gold", titlePart, parsedAmounts[i], float32(parsedPrices[i]))
+			log.Infof("%s: %d for %f gold", title, parsedAmounts[i], float32(parsedPrices[i]))
 		}
 	}
 }
@@ -107,7 +123,7 @@ func parsePrices(data string) []float64 {
 			}
 			floats[i] = f
 		}
-	}	
+	}
 	return floats
 }
 
@@ -150,11 +166,11 @@ func parseImagePart(filePath string, x int, y int, width int, height int) (strin
 		log.Errorf("Error reading response: %s", err)
 		return "", err
 	}
-	log.Debugf("Response: %s", resp)
+	log.Tracef("Response: %s", resp)
 	var bodyJson map[string]interface{}
 	json.Unmarshal(bodyBytes, &bodyJson)
 	result := bodyJson["result"]
-	log.Debugf("Parsed: %s", result)
+	log.Tracef("Parsed: %s", result)
 	return result.(string), nil
 }
 
@@ -169,7 +185,7 @@ func getImagePart(filePath string, x int, y int, width int, height int) (image.I
 		log.Errorf("Error decoding image: %s", err)
 		return nil, err
 	}
-	rgbImg := img.(*image.NRGBA)
+	rgbImg := img.(*image.RGBA)
 	subImage := rgbImg.SubImage(image.Rect(x, y, x+width, y+height))
 	return subImage, nil
 }
