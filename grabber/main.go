@@ -12,6 +12,7 @@ import (
 
 var screenIndexPtr *int
 var intervalSecondsPtr *int
+var screenshotsFolderPrt *string
 
 func listScreens() {
 	numDisplays := screenshot.NumActiveDisplays()
@@ -27,6 +28,7 @@ func initFlags() {
 	screenIndexPtr = getopt.IntLong("screen-index", 's', 0, "Which screen you want to grab from (default: 0)")
 	intervalSecondsPtr = getopt.IntLong("interval", 'i', 10, "Interval to take screenshots in seconds (default: 10)")
 	runListScreens := getopt.BoolLong("list-screens", 'l', "List all available screens")
+	screenshotsFolderPrt = getopt.StringLong("screenshot-folder", 'f', "./screenshots/", "Where to store screenshots (default: ./screenshots/)")
 	getopt.CommandLine.SetParameters("")
 	getopt.Parse()
 	if *runListScreens {
@@ -38,7 +40,7 @@ func initFlags() {
 func main() {
 	initFlags()
 
-	err := os.MkdirAll("./screenshots/", 0666)
+	err := os.MkdirAll(*screenshotsFolderPrt, 0666)
 	if err != nil {
 		fmt.Printf("Error creating screenshots folder: %s", err)
 		os.Exit(-1)
@@ -48,7 +50,7 @@ func main() {
 		fmt.Println("Saving screenshot...")
 		image, err := screenshot.CaptureDisplay(*screenIndexPtr)
 		if err == nil {
-			filename := fmt.Sprintf("./screenshots/%s.png", time.Now().Format("2006-01-02-15-04-05"))
+			filename := fmt.Sprintf("%s%s.png", *screenshotsFolderPrt, time.Now().Format("2006-01-02-15-04-05"))
 			file, err := os.Create(filename)
 			if err == nil {
 				err := png.Encode(file, image)
