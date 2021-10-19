@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -12,8 +13,10 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/m3db/prometheus_remote_client_golang/promremote"
 	"github.com/pborman/getopt"
 	log "github.com/sirupsen/logrus"
 )
@@ -22,6 +25,8 @@ import (
 
 var screenshotsFolderPrt *string
 var keepScreenshots = false
+
+var prometheusRemoteWriteClient promremote.Client
 
 func initFlags() {
 	getopt.CommandLine.SetParameters("")
@@ -34,6 +39,8 @@ func main() {
 	log.SetLevel(log.DebugLevel)
 
 	initFlags()
+
+	initPrometheusRemoteWriteClient()
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -71,9 +78,23 @@ func main() {
 	}
 	log.Info("Watching for file system changes...")
 
-	// go parseScreenshot("samples/ah-iron-ore.png")
+	// go parseScreenshot("samples/ah1.png")
 
 	<-done
+}
+
+func initPrometheusRemoteWriteClient() {
+	cfg := promremote.NewConfig(
+		promremote.WriteURLOption("https://<user>:<pass>@prometheus-prod-01-eu-west-0.grafana.net/api/prom/push"),
+		promremote.UserAgent("New World Auction House Parser v0.0.1"),
+	)
+	client, err := promremote.NewClient(cfg)
+	if err != nil {
+		log.Errorf("Error creating remote write client: %s", err)
+		return
+	} else {
+		prometheusRemoteWriteClient = client
+	}
 }
 
 func parseScreenshot(fileName string) {
@@ -106,6 +127,30 @@ func parseScreenshot(fileName string) {
 	for i := 0; i < len(parsedPrices); i++ {
 		if parsedPrices[i] != -1 && parsedAmounts[i] != -1 {
 			log.Infof("%s: %d for %f gold", title, parsedAmounts[i], float32(parsedPrices[i]))
+			if prometheusRemoteWriteClient != nil {
+				timeSeriesList := promremote.TSList {
+					promremote.TimeSeries{
+						Labels: []promremote.Label{
+							{
+								Name: "__name__",
+								Value: "new_world_auction_house_item_price",
+							},
+							{
+								Name: "item_name",
+								Value: title,
+							},
+						},
+						Datapoint: promremote.Datapoint{
+							Timestamp: time.Now(),
+							Value: parsedPrices[i],
+						},
+					},
+				}
+				_, err := prometheusRemoteWriteClient.WriteTimeSeries(context.Background(), timeSeriesList, promremote.WriteOptions{})
+				if err != nil {
+					log.Warnf("Error remote writing: %s", err)
+				}
+			}
 		}
 	}
 }
